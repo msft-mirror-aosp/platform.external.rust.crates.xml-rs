@@ -1,0 +1,12 @@
+diff --git a/Android.bp b/Android.bp
+index b9fe3bd..1144ed1 100644
+--- a/Android.bp
++++ b/Android.bp
+@@ -113,6 +113,7 @@ rust_test {
+     defaults: ["xml-rs_test_defaults_xml_rs"],
+     // has rustc warnings
+     srcs: ["tests/event_writer.rs"],
++    data: ["tests/documents/*"],
+ }
+ 
+ rust_test_host {
