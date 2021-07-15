@@ -99,24 +99,6 @@ rust_test {
 }
 
 rust_test_host {
-    name: "xml-rs_host_test_tests_event_writer",
-    defaults: ["xml-rs_test_defaults_xml_rs"],
-    // has rustc warnings
-    srcs: ["tests/event_writer.rs"],
-    test_options: {
-        unit_test: true,
-    },
-}
-
-rust_test {
-    name: "xml-rs_device_test_tests_event_writer",
-    defaults: ["xml-rs_test_defaults_xml_rs"],
-    // has rustc warnings
-    srcs: ["tests/event_writer.rs"],
-    data: ["tests/documents/*"],
-}
-
-rust_test_host {
     name: "xml-rs_host_test_tests_streaming",
     defaults: ["xml-rs_test_defaults_xml_rs"],
     // has rustc warnings
