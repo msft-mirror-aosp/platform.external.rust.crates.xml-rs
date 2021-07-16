@@ -8,6 +8,8 @@
   ],
   "device": true,
   "run": true,
-  "tests": true,
-  "patch": "patches/Android.bp.patch"
+  "test-blocklist": [
+    "tests/event_writer.rs"
+  ],
+  "tests": true
 }
