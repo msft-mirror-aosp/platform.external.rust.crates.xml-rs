@@ -4,7 +4,8 @@
 
 
 rust_library {
-    name: "libxml",
+    name: "libxml_rust",
+    stem: "libxml",
     // has rustc warnings
     host_supported: true,
     crate_name: "xml",
@@ -26,7 +27,7 @@ rust_defaults {
     edition: "2015",
     rustlibs: [
         "liblazy_static",
-        "libxml",
+        "libxml_rust",
     ],
 }
 
@@ -77,7 +78,7 @@ rust_defaults {
     edition: "2015",
     rustlibs: [
         "liblazy_static",
-        "libxml",
+        "libxml_rust",
     ],
 }
 
@@ -141,6 +142,6 @@ rust_binary {
     srcs: ["src/analyze.rs"],
     edition: "2015",
     rustlibs: [
-        "libxml",
+        "libxml_rust",
     ],
 }
