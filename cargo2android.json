@@ -8,8 +8,8 @@
   ],
   "device": true,
   "run": true,
-  "test-blocklist": [
-    "tests/event_writer.rs"
+  "test-data": [
+    "tests/event_writer.rs=tests/documents/*"
   ],
   "tests": true
 }
