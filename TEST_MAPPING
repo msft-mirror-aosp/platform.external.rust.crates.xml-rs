@@ -5,6 +5,20 @@
       "path": "external/rust/crates/serde-xml-rs"
     }
   ],
+  "postsubmit": [
+    {
+      "name": "virtualizationservice_device_test"
+    },
+    {
+      "name": "xml-rs_test_tests_event_reader"
+    },
+    {
+      "name": "xml-rs_test_tests_event_writer"
+    },
+    {
+      "name": "xml-rs_test_tests_streaming"
+    }
+  ],
   "presubmit": [
     {
       "name": "virtualizationservice_device_test"
