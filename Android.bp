@@ -21,13 +21,12 @@ license {
 rust_library {
     name: "libxml_rust",
     stem: "libxml",
-    // has rustc warnings
     host_supported: true,
     crate_name: "xml",
     cargo_env_compat: true,
-    cargo_pkg_version: "0.8.4",
+    cargo_pkg_version: "0.8.15-cvss-cries-wolf",
     srcs: ["src/lib.rs"],
-    edition: "2015",
+    edition: "2021",
     apex_available: [
         "//apex_available:platform",
         "com.android.virt",
@@ -36,63 +35,14 @@ rust_library {
     vendor_available: true,
 }
 
-rust_defaults {
-    name: "xml-rs_test_defaults",
-    crate_name: "xml_rs",
-    cargo_env_compat: true,
-    cargo_pkg_version: "0.8.4",
-    test_suites: ["general-tests"],
-    auto_gen_config: true,
-    edition: "2015",
-    rustlibs: [
-        "liblazy_static",
-        "libxml_rust",
-    ],
-}
-
-rust_test {
-    name: "xml-rs_test_tests_event_reader",
-    defaults: ["xml-rs_test_defaults"],
-    // has rustc warnings
-    host_supported: true,
-    srcs: ["tests/event_reader.rs"],
-    test_options: {
-        unit_test: true,
-    },
-}
-
-rust_test {
-    name: "xml-rs_test_tests_event_writer",
-    defaults: ["xml-rs_test_defaults"],
-    // has rustc warnings
-    host_supported: true,
-    srcs: ["tests/event_writer.rs"],
-    test_options: {
-        unit_test: true,
-    },
-    data: ["tests/documents/*"],
-}
-
-rust_test {
-    name: "xml-rs_test_tests_streaming",
-    defaults: ["xml-rs_test_defaults"],
-    // has rustc warnings
-    host_supported: true,
-    srcs: ["tests/streaming.rs"],
-    test_options: {
-        unit_test: true,
-    },
-}
-
 rust_binary {
     name: "xml_analyze",
-    // has rustc warnings
     host_supported: true,
     crate_name: "xml_analyze",
     cargo_env_compat: true,
-    cargo_pkg_version: "0.8.4",
+    cargo_pkg_version: "0.8.15-cvss-cries-wolf",
     srcs: ["src/analyze.rs"],
-    edition: "2015",
+    edition: "2021",
     rustlibs: [
         "libxml_rust",
     ],

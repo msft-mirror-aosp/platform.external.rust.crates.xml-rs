@@ -1,14 +1,14 @@
-use reader::events::XmlEvent;
-use reader::lexer::Token;
+use crate::reader::error::SyntaxError;
+use crate::reader::lexer::Token;
+use crate::{common::is_whitespace_char, reader::events::XmlEvent};
 
-use super::{Result, PullParser, State};
+use super::{PullParser, Result, State};
 
 impl PullParser {
     pub fn inside_cdata(&mut self, t: Token) -> Option<Result> {
         match t {
             Token::CDataEnd => {
-                self.lexer.enable_errors();
-                let event = if self.config.cdata_to_characters {
+                let event = if self.config.c.cdata_to_characters {
                     None
                 } else {
                     let data = self.take_buf();
@@ -17,16 +17,18 @@ impl PullParser {
                 self.into_state(State::OutsideTag, event)
             }
 
-            Token::Whitespace(_) => {
-                t.push_to_string(&mut self.buf);
+            Token::Character(c) if !self.is_valid_xml_char(c) => {
+                Some(self.error(SyntaxError::InvalidCharacterEntity(c as u32)))
+            },
+            Token::Character(c) => {
+                if !is_whitespace_char(c) {
+                    self.inside_whitespace = false;
+                }
+                self.buf.push(c);
                 None
             }
 
-            _ => {
-                self.inside_whitespace = false;
-                t.push_to_string(&mut self.buf);
-                None
-            }
+            _ => unreachable!(),
         }
     }
 }
