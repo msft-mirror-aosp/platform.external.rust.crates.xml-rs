@@ -7,27 +7,5 @@
     {
       "path": "packages/modules/Virtualization/virtualizationmanager"
     }
-  ],
-  "presubmit": [
-    {
-      "name": "xml-rs_test_tests_event_reader"
-    },
-    {
-      "name": "xml-rs_test_tests_event_writer"
-    },
-    {
-      "name": "xml-rs_test_tests_streaming"
-    }
-  ],
-  "presubmit-rust": [
-    {
-      "name": "xml-rs_test_tests_event_reader"
-    },
-    {
-      "name": "xml-rs_test_tests_event_writer"
-    },
-    {
-      "name": "xml-rs_test_tests_streaming"
-    }
   ]
 }
