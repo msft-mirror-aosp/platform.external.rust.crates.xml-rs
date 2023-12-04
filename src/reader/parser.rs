@@ -1,23 +1,18 @@
 //! Contains an implementation of pull-based XML parser.
 
-
-use crate::common::is_xml11_char;
-use crate::common::is_xml10_char;
-use crate::common::is_xml11_char_not_restricted;
-use crate::reader::error::SyntaxError;
-use std::collections::HashMap;
-use std::io::prelude::*;
-
-use crate::attribute::OwnedAttribute;
-use crate::common::{self, is_name_char, is_name_start_char, Position, TextPosition, XmlVersion, is_whitespace_char};
+use crate::common::{is_xml10_char, is_xml11_char, is_xml11_char_not_restricted, is_name_char, is_name_start_char, is_whitespace_char};
+use crate::common::{Position, TextPosition, XmlVersion};
 use crate::name::OwnedName;
 use crate::namespace::NamespaceStack;
-
 use crate::reader::config::ParserConfig2;
+use crate::reader::error::SyntaxError;
 use crate::reader::events::XmlEvent;
+use crate::reader::indexset::AttributesSet;
 use crate::reader::lexer::{Lexer, Token};
-
 use super::{Error, ErrorKind};
+
+use std::collections::HashMap;
+use std::io::Read;
 
 macro_rules! gen_takes(
     ($($field:ident -> $method:ident, $t:ty, $def:expr);+) => (
@@ -42,7 +37,7 @@ gen_takes!(
     element_name -> take_element_name, Option<OwnedName>, None;
 
     attr_name    -> take_attr_name, Option<OwnedName>, None;
-    attributes   -> take_attributes, Vec<OwnedAttribute>, vec!()
+    attributes   -> take_attributes, AttributesSet, AttributesSet::new()
 );
 
 mod inside_cdata;
@@ -107,7 +102,7 @@ impl PullParser {
 
     #[inline]
     fn new_with_config2(config: ParserConfig2) -> PullParser {
-        let mut lexer = Lexer::new();
+        let mut lexer = Lexer::new(&config);
         if let Some(enc) = config.override_encoding {
             lexer.set_encoding(enc);
         }
@@ -133,7 +128,7 @@ impl PullParser {
                 element_name: None,
                 quote: None,
                 attr_name: None,
-                attributes: Vec::new(),
+                attributes: AttributesSet::new(),
             },
             final_result: None,
             next_event: None,
@@ -299,7 +294,7 @@ struct MarkupData {
     name: String,     // used for processing instruction name
     ref_data: String,  // used for reference content
 
-    version: Option<common::XmlVersion>,  // used for XML declaration version
+    version: Option<XmlVersion>,  // used for XML declaration version
     encoding: Option<String>,  // used for XML declaration encoding
     standalone: Option<bool>,  // used for XML declaration standalone parameter
 
@@ -307,7 +302,7 @@ struct MarkupData {
 
     quote: Option<QuoteToken>,  // used to hold opening quote for attribute value
     attr_name: Option<OwnedName>,  // used to hold attribute name
-    attributes: Vec<OwnedAttribute>   // used to hold all accumulated attributes
+    attributes: AttributesSet,   // used to hold all accumulated attributes
 }
 
 impl PullParser {
@@ -401,7 +396,7 @@ impl PullParser {
     fn next_pos(&mut self) {
         // unfortunately calls to next_pos will never be perfectly balanced with push_pos,
         // at very least because parse errors and EOF can happen unexpectedly without a prior push.
-        if self.pos.len() > 0 {
+        if !self.pos.is_empty() {
             if self.pos.len() > 1 {
                 self.pos.remove(0);
             } else {
@@ -490,7 +485,7 @@ impl PullParser {
             let name = this.take_buf();
             match name.parse() {
                 Ok(name) => on_name(this, t, name),
-                Err(_) => Some(this.error(SyntaxError::InvalidQualifiedName(name.into())))
+                Err(_) => Some(this.error(SyntaxError::InvalidQualifiedName(name.into()))),
             }
         };
 
@@ -504,6 +499,9 @@ impl PullParser {
 
             Token::Character(c) if c != ':' && (self.buf.is_empty() && is_name_start_char(c) ||
                                           self.buf_has_data() && is_name_char(c)) => {
+                if self.buf.len() > self.config.max_name_length {
+                    return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                }
                 self.buf.push(c);
                 None
             },
@@ -517,7 +515,7 @@ impl PullParser {
 
             Token::Character(c) if is_whitespace_char(c) => invoke_callback(self, t),
 
-            _ => Some(self.error(SyntaxError::UnexpectedQualifiedName(t)))
+            _ => Some(self.error(SyntaxError::UnexpectedQualifiedName(t))),
         }
     }
 
@@ -529,7 +527,7 @@ impl PullParser {
     fn read_attribute_value<F>(&mut self, t: Token, on_value: F) -> Option<Result>
       where F: Fn(&mut PullParser, String) -> Option<Result> {
         match t {
-            Token::Character(c) if self.data.quote.is_none() && is_whitespace_char(c) => None,  // skip leading whitespace
+            Token::Character(c) if self.data.quote.is_none() && is_whitespace_char(c) => None, // skip leading whitespace
 
             Token::DoubleQuote | Token::SingleQuote => match self.data.quote {
                 None => {  // Entered attribute value
@@ -547,6 +545,9 @@ impl PullParser {
                             return Some(self.error(SyntaxError::InvalidCharacterEntity(c as u32)));
                         }
                     }
+                    if self.buf.len() > self.config.max_attribute_length {
+                        return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                    }
                     t.push_to_string(&mut self.buf);
                     None
                 }
@@ -557,8 +558,7 @@ impl PullParser {
                 self.into_state_continue(State::InsideReference)
             },
 
-            Token::OpeningTagStart =>
-                Some(self.error(SyntaxError::UnexpectedOpeningTag)),
+            Token::OpeningTagStart => Some(self.error(SyntaxError::UnexpectedOpeningTag)),
 
             Token::Character(c) if !self.is_valid_xml_char_not_restricted(c) => {
                 Some(self.error(SyntaxError::InvalidCharacterEntity(c as u32)))
@@ -566,6 +566,9 @@ impl PullParser {
 
             // Every character except " and ' and < is okay
             _ if self.data.quote.is_some() => {
+                if self.buf.len() > self.config.max_attribute_length {
+                    return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                }
                 t.push_to_string(&mut self.buf);
                 None
             }
@@ -576,11 +579,11 @@ impl PullParser {
 
     fn emit_start_element(&mut self, emit_end_element: bool) -> Option<Result> {
         let mut name = self.data.take_element_name()?;
-        let mut attributes = self.data.take_attributes();
+        let mut attributes = self.data.take_attributes().into_vec();
 
         // check whether the name prefix is bound and fix its namespace
         match self.nst.get(name.borrow().prefix_repr()) {
-            Some("") => name.namespace = None,  // default namespace
+            Some("") => name.namespace = None, // default namespace
             Some(ns) => name.namespace = Some(ns.into()),
             None => return Some(self.error(SyntaxError::UnboundElementPrefix(name.to_string().into())))
         }
