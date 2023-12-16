@@ -31,8 +31,8 @@ impl PullParser {
                 _ => None,
             },
             DoctypeSubstate::String => match t {
-                Token::SingleQuote if self.data.quote != Some(QuoteToken::SingleQuoteToken) => { None },
-                Token::DoubleQuote if self.data.quote != Some(QuoteToken::DoubleQuoteToken) => { None },
+                Token::SingleQuote if self.data.quote != Some(QuoteToken::SingleQuoteToken) => None,
+                Token::DoubleQuote if self.data.quote != Some(QuoteToken::DoubleQuoteToken) => None,
                 Token::SingleQuote | Token::DoubleQuote => {
                     self.data.quote = None;
                     self.into_state_continue(State::InsideDoctype(DoctypeSubstate::Outside))
@@ -51,12 +51,12 @@ impl PullParser {
                     None
                 },
                 Token::Character(c) if is_whitespace_char(c) => {
-                    match self.buf.as_str() {
+                    let buf = self.take_buf();
+                    match buf.as_str() {
                         "ENTITY" => self.into_state_continue(State::InsideDoctype(DoctypeSubstate::BeforeEntityName)),
                         "NOTATION" | "ELEMENT" | "ATTLIST" => self.into_state_continue(State::InsideDoctype(DoctypeSubstate::SkipDeclaration)),
-                        s => Some(self.error(SyntaxError::UnknownMarkupDeclaration(s.into()))),
+                        _ => Some(self.error(SyntaxError::UnknownMarkupDeclaration(buf.into()))),
                     }
-
                 },
                 _ => Some(self.error(SyntaxError::UnexpectedToken(t))),
             },
@@ -69,6 +69,9 @@ impl PullParser {
                         self.into_state_continue(State::InsideDoctype(DoctypeSubstate::PEReferenceDefinitionStart))
                     },
                     Token::Character(c) if is_name_start_char(c) => {
+                        if self.data.name.len() > self.config.max_name_length {
+                            return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                        }
                         self.data.name.push(c);
                         self.into_state_continue(State::InsideDoctype(DoctypeSubstate::EntityName))
                     },
@@ -80,6 +83,9 @@ impl PullParser {
                     self.into_state_continue(State::InsideDoctype(DoctypeSubstate::BeforeEntityValue))
                 },
                 Token::Character(c) if is_name_char(c) => {
+                    if self.data.name.len() > self.config.max_name_length {
+                        return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                    }
                     self.data.name.push(c);
                     None
                 },
@@ -144,6 +150,9 @@ impl PullParser {
             },
             DoctypeSubstate::PEReferenceDefinition => match t {
                 Token::Character(c) if is_name_char(c) => {
+                    if self.data.name.len() > self.config.max_name_length {
+                        return Some(self.error(SyntaxError::ExceededConfiguredLimit));
+                    }
                     self.data.name.push(c);
                     None
                 },
