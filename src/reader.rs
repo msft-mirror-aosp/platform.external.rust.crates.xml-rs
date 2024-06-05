@@ -3,44 +3,47 @@
 //! The most important type in this module is `EventReader`, which provides an iterator
 //! view for events in XML document.
 
-use std::io::{Read};
+use std::io::Read;
+use std::iter::FusedIterator;
 use std::result;
 
-use common::{Position, TextPosition};
+use crate::common::{Position, TextPosition};
 
 pub use self::config::ParserConfig;
+pub use self::config::ParserConfig2;
+pub use self::error::{Error, ErrorKind};
 pub use self::events::XmlEvent;
 
 use self::parser::PullParser;
 
-mod lexer;
-mod parser;
 mod config;
 mod events;
-
+mod lexer;
+mod parser;
+mod indexset;
 mod error;
-pub use self::error::{Error, ErrorKind};
+
 
 /// A result type yielded by `XmlReader`.
-pub type Result<T> = result::Result<T, Error>;
+pub type Result<T, E = Error> = result::Result<T, E>;
 
 /// A wrapper around an `std::io::Read` instance which provides pull-based XML parsing.
 pub struct EventReader<R: Read> {
     source: R,
-    parser: PullParser
+    parser: PullParser,
 }
 
 impl<R: Read> EventReader<R> {
     /// Creates a new reader, consuming the given stream.
     #[inline]
     pub fn new(source: R) -> EventReader<R> {
-        EventReader::new_with_config(source, ParserConfig::new())
+        EventReader::new_with_config(source, ParserConfig2::new())
     }
 
     /// Creates a new reader with the provded configuration, consuming the given stream.
     #[inline]
-    pub fn new_with_config(source: R, config: ParserConfig) -> EventReader<R> {
-        EventReader { source: source, parser: PullParser::new(config) }
+    pub fn new_with_config(source: R, config: impl Into<ParserConfig2>) -> EventReader<R> {
+        EventReader { source, parser: PullParser::new(config) }
     }
 
     /// Pulls and returns next XML event from the stream.
@@ -50,6 +53,27 @@ impl<R: Read> EventReader<R> {
     #[inline]
     pub fn next(&mut self) -> Result<XmlEvent> {
         self.parser.next(&mut self.source)
+    }
+
+    /// Skips all XML events until the next end tag at the current level.
+    ///
+    /// Convenience function that is useful for the case where you have
+    /// encountered a start tag that is of no interest and want to
+    /// skip the entire XML subtree until the corresponding end tag.
+    #[inline]
+    pub fn skip(&mut self) -> Result<()> {
+        let mut depth = 1;
+
+        while depth > 0 {
+            match self.next()? {
+                XmlEvent::StartElement { .. } => depth += 1,
+                XmlEvent::EndElement { .. } => depth -= 1,
+                XmlEvent::EndDocument => unreachable!(),
+                _ => {}
+            }
+        }
+
+        Ok(())
     }
 
     pub fn source(&self) -> &R { &self.source }
@@ -88,7 +112,7 @@ impl<R: Read> IntoIterator for EventReader<R> {
 /// it will be returned by the iterator once, and then it will stop producing events.
 pub struct Events<R: Read> {
     reader: EventReader<R>,
-    finished: bool
+    finished: bool,
 }
 
 impl<R: Read> Events<R> {
@@ -103,17 +127,20 @@ impl<R: Read> Events<R> {
 
 }
 
+impl<R: Read> FusedIterator for Events<R> {
+}
+
 impl<R: Read> Iterator for Events<R> {
     type Item = Result<XmlEvent>;
 
     #[inline]
     fn next(&mut self) -> Option<Result<XmlEvent>> {
-        if self.finished && !self.reader.parser.is_ignoring_end_of_stream() { None }
-        else {
+        if self.finished && !self.reader.parser.is_ignoring_end_of_stream() {
+            None
+        } else {
             let ev = self.reader.next();
-            match ev {
-                Ok(XmlEvent::EndDocument) | Err(_) => self.finished = true,
-                _ => {}
+            if let Ok(XmlEvent::EndDocument) | Err(_) = ev {
+                self.finished = true;
             }
             Some(ev)
         }
@@ -123,6 +150,7 @@ impl<R: Read> Iterator for Events<R> {
 impl<'r> EventReader<&'r [u8]> {
     /// A convenience method to create an `XmlReader` from a string slice.
     #[inline]
+    #[must_use]
     pub fn from_str(source: &'r str) -> EventReader<&'r [u8]> {
         EventReader::new(source.as_bytes())
     }

@@ -1,18 +1,17 @@
+use std::error::Error;
+use std::fmt;
 use std::io;
 use std::io::prelude::*;
-use std::fmt;
 use std::result;
-use std::borrow::Cow;
-use std::error::Error;
 
-use common;
-use name::{Name, OwnedName};
-use attribute::Attribute;
-use escape::{escape_str_attribute, escape_str_pcdata};
-use common::XmlVersion;
-use namespace::{NamespaceStack, NS_NO_PREFIX, NS_EMPTY_URI, NS_XMLNS_PREFIX, NS_XML_PREFIX};
+use crate::attribute::Attribute;
+use crate::common;
+use crate::common::XmlVersion;
+use crate::escape::{AttributeEscapes, Escaped, PcDataEscapes};
+use crate::name::{Name, OwnedName};
+use crate::namespace::{NamespaceStack, NS_EMPTY_URI, NS_NO_PREFIX, NS_XMLNS_PREFIX, NS_XML_PREFIX};
 
-use writer::config::EmitterConfig;
+use crate::writer::config::EmitterConfig;
 
 /// An error which may be returned by `XmlWriter` when writing XML events.
 #[derive(Debug)]
@@ -32,47 +31,35 @@ pub enum EmitterError {
 
     /// End element name is not specified when it is needed, for example, when automatic
     /// closing is not enabled in configuration.
-    EndElementNameIsNotSpecified
+    EndElementNameIsNotSpecified,
 }
 
 impl From<io::Error> for EmitterError {
+    #[cold]
     fn from(err: io::Error) -> EmitterError {
         EmitterError::Io(err)
     }
 }
 
 impl fmt::Display for EmitterError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-
-        write!(f, "emitter error: ")?;
-        match *self {
-            EmitterError::Io(ref e) =>
-                write!(f, "I/O error: {}", e),
-            ref other =>
-                write!(f, "{}", other.description()),
+    #[cold]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("emitter error: ")?;
+        match self {
+            EmitterError::Io(e) => write!(f, "I/O error: {e}"),
+            EmitterError::DocumentStartAlreadyEmitted => f.write_str("document start event has already been emitted"),
+            EmitterError::LastElementNameNotAvailable => f.write_str("last element name is not available"),
+            EmitterError::EndElementNameIsNotEqualToLastStartElementName => f.write_str("end element name is not equal to last start element name"),
+            EmitterError::EndElementNameIsNotSpecified => f.write_str("end element name is not specified and can't be inferred"),
         }
     }
 }
 
 impl Error for EmitterError {
-    fn description(&self) -> &str {
-        match *self {
-            EmitterError::Io(_) =>
-                "I/O error",
-            EmitterError::DocumentStartAlreadyEmitted =>
-                "document start event has already been emitted",
-            EmitterError::LastElementNameNotAvailable =>
-                "last element name is not available",
-            EmitterError::EndElementNameIsNotEqualToLastStartElementName =>
-                "end element name is not equal to last start element name",
-            EmitterError::EndElementNameIsNotSpecified =>
-                "end element name is not specified and can't be inferred",
-        }
-    }
 }
 
 /// A result type yielded by `XmlWriter`.
-pub type Result<T> = result::Result<T, EmitterError>;
+pub type Result<T, E = EmitterError> = result::Result<T, E>;
 
 // TODO: split into a low-level fast writer without any checks and formatting logic and a
 // high-level indenting validating writer
@@ -87,23 +74,26 @@ pub struct Emitter {
     element_names: Vec<OwnedName>,
 
     start_document_emitted: bool,
-    just_wrote_start_element: bool
+    just_wrote_start_element: bool,
 }
 
 impl Emitter {
     pub fn new(config: EmitterConfig) -> Emitter {
+        let mut indent_stack = Vec::with_capacity(16);
+        indent_stack.push(IndentFlags::WroteNothing);
+
         Emitter {
             config,
 
             nst: NamespaceStack::empty(),
 
             indent_level: 0,
-            indent_stack: vec![IndentFlags::WroteNothing],
+            indent_stack,
 
             element_names: Vec::new(),
 
             start_document_emitted: false,
-            just_wrote_start_element: false
+            just_wrote_start_element: false,
         }
     }
 }
@@ -124,27 +114,26 @@ impl Emitter {
 
     #[inline]
     fn wrote_text(&self) -> bool {
-        *self.indent_stack.last().unwrap() == IndentFlags::WroteText
+        self.indent_stack.last().map_or(false, |&e| e == IndentFlags::WroteText)
     }
 
     #[inline]
     fn wrote_markup(&self) -> bool {
-        *self.indent_stack.last().unwrap() == IndentFlags::WroteMarkup
+        self.indent_stack.last().map_or(false, |&e| e == IndentFlags::WroteMarkup)
     }
 
     #[inline]
     fn set_wrote_text(&mut self) {
-        *self.indent_stack.last_mut().unwrap() = IndentFlags::WroteText;
+        if let Some(e) = self.indent_stack.last_mut() {
+            *e = IndentFlags::WroteText;
+        }
     }
 
     #[inline]
     fn set_wrote_markup(&mut self) {
-        *self.indent_stack.last_mut().unwrap() = IndentFlags::WroteMarkup;
-    }
-
-    #[inline]
-    fn reset_state(&mut self) {
-        *self.indent_stack.last_mut().unwrap() = IndentFlags::WroteNothing;
+        if let Some(e) = self.indent_stack.last_mut() {
+            *e = IndentFlags::WroteMarkup;
+        }
     }
 
     fn write_newline<W: Write>(&mut self, target: &mut W, level: usize) -> Result<()> {
@@ -216,7 +205,7 @@ impl Emitter {
         self.before_markup(target)?;
         let result = {
             let mut write = move || {
-                write!(target, "<?xml version=\"{}\" encoding=\"{}\"", version, encoding)?;
+                write!(target, "<?xml version=\"{version}\" encoding=\"{encoding}\"")?;
 
                 if let Some(standalone) = standalone {
                     write!(target, " standalone=\"{}\"", if standalone { "yes" } else { "no" })?;
@@ -260,11 +249,11 @@ impl Emitter {
         self.before_markup(target)?;
 
         let result = {
-            let mut write = || {
-                write!(target, "<?{}", name)?;
+            let mut write = move || {
+                write!(target, "<?{name}")?;
 
                 if let Some(data) = data {
-                    write!(target, " {}", data)?;
+                    write!(target, " {data}")?;
                 }
 
                 write!(target, "?>")?;
@@ -280,8 +269,8 @@ impl Emitter {
     }
 
     fn emit_start_element_initial<W>(&mut self, target: &mut W,
-                                     name: Name,
-                                     attributes: &[Attribute]) -> Result<()>
+                                     name: Name<'_>,
+                                     attributes: &[Attribute<'_>]) -> Result<()>
         where W: Write
     {
         self.check_document_started(target)?;
@@ -295,8 +284,8 @@ impl Emitter {
     }
 
     pub fn emit_start_element<W>(&mut self, target: &mut W,
-                                 name: Name,
-                                 attributes: &[Attribute]) -> Result<()>
+                                 name: Name<'_>,
+                                 attributes: &[Attribute<'_>]) -> Result<()>
         where W: Write
     {
         if self.config.keep_element_names_stack {
@@ -324,29 +313,31 @@ impl Emitter {
                 //prefix if self.nst.get(prefix) == Some(uri) => Ok(()),
                 // emit xmlns only if it is overridden
                 NS_NO_PREFIX => if uri != NS_EMPTY_URI {
-                    write!(target, " xmlns=\"{}\"", uri)
+                    write!(target, " xmlns=\"{uri}\"")
                 } else { Ok(()) },
                 // everything else
-                prefix => write!(target, " xmlns:{}=\"{}\"", prefix, uri)
+                prefix => write!(target, " xmlns:{prefix}=\"{uri}\"")
             }?;
         }
         Ok(())
     }
 
     pub fn emit_attributes<W: Write>(&mut self, target: &mut W,
-                                      attributes: &[Attribute]) -> Result<()> {
-        for attr in attributes.iter() {
-            write!(
-                target, " {}=\"{}\"",
-                attr.name.repr_display(),
-                if self.config.perform_escaping { escape_str_attribute(attr.value) } else { Cow::Borrowed(attr.value) }
-            )?
+                                      attributes: &[Attribute<'_>]) -> Result<()> {
+        for attr in attributes.iter() {            
+            write!(target, " {}=\"", attr.name.repr_display())?;
+            if self.config.perform_escaping {
+                write!(target, "{}", Escaped::<AttributeEscapes>::new(attr.value))?;
+            } else {
+                write!(target, "{}", attr.value)?;
+            }
+            write!(target, "\"")?;
         }
         Ok(())
     }
 
     pub fn emit_end_element<W: Write>(&mut self, target: &mut W,
-                                      name: Option<Name>) -> Result<()> {
+                                      name: Option<Name<'_>>) -> Result<()> {
         let owned_name = if self.config.keep_element_names_stack {
             Some(self.element_names.pop().ok_or(EmitterError::LastElementNameNotAvailable)?)
         } else {
@@ -399,17 +390,16 @@ impl Emitter {
         }
     }
 
-    pub fn emit_characters<W: Write>(&mut self, target: &mut W,
-                                      content: &str) -> Result<()> {
+    pub fn emit_characters<W: Write>(&mut self, target: &mut W, content: &str) -> Result<()> {
         self.check_document_started(target)?;
         self.fix_non_empty_element(target)?;
-        target.write_all(
-            (if self.config.perform_escaping {
-                escape_str_pcdata(content)
-            } else {
-                Cow::Borrowed(content)
-            }).as_bytes()
-        )?;
+
+        if self.config.perform_escaping {
+            write!(target, "{}", Escaped::<PcDataEscapes>::new(content))?;
+        } else {
+            target.write_all(content.as_bytes())?;
+        }
+
         self.after_text();
         Ok(())
     }
@@ -420,7 +410,7 @@ impl Emitter {
         // TODO: add escaping dashes at the end of the comment
 
         let autopad_comments = self.config.autopad_comments;
-        let write = |target: &mut W| -> Result<()> {
+        let write = move |target: &mut W| -> Result<()> {
             target.write_all(b"<!--")?;
 
             if autopad_comments && !content.starts_with(char::is_whitespace) {
